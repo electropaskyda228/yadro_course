@@ -1,0 +1,477 @@
+openapi: 3.0.3
+info:
+  title: XKCD Search Service API
+  description: |
+    REST API для микросервисной системы поиска комиксов XKCD.
+    
+    Система предоставляет:
+    - Поиск комиксов по базе данных и индексу
+    - Управление базой данных (обновление, очистка)
+    - Статистику и мониторинг сервисов
+    - Аутентификацию через JWT токены
+    
+    ## Аутентификация
+    
+    Для доступа к защищенным endpoints необходимо:
+    1. Получить токен через `POST /api/login`
+    2. Передавать токен в заголовке `Authorization: Token <токен>`
+    
+    ## Rate Limiting
+    
+    - `/api/search` - ограничение по количеству одновременных запросов (concurrency limiter)
+    - `/api/isearch` - ограничение по количеству запросов в секунду (rate limiter)
+  version: 1.0.0
+  contact:
+    name: XKCD Search Service
+servers:
+  - url: http://localhost:28080/api
+    description: Локальный сервер разработки
+  - url: http://localhost:8080/api
+    description: Сервер через nginx proxy
+
+tags:
+  - name: Health
+    description: Проверка состояния сервисов
+  - name: Authentication
+    description: Аутентификация и авторизация
+  - name: Search
+    description: Поиск комиксов
+  - name: Database
+    description: Управление базой данных
+  - name: Statistics
+    description: Статистика и мониторинг
+
+paths:
+  /ping:
+    get:
+      tags:
+        - Health
+      summary: Проверка статуса сервисов
+      description: |
+        Проверяет доступность всех микросервисов (update, search, words).
+        Возвращает статус каждого сервиса.
+      operationId: ping
+      responses:
+        '200':
+          description: Успешный ответ со статусом всех сервисов
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PingResponse'
+              example:
+                replies:
+                  update: "ok"
+                  search: "ok"
+                  words: "ok"
+
+  /login:
+    post:
+      tags:
+        - Authentication
+      summary: Авторизация
+      description: |
+        Выполняет авторизацию пользователя и возвращает JWT токен.
+        Токен необходим для доступа к защищенным endpoints.
+      operationId: login
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+            example:
+              name: "admin"
+              password: "password"
+      responses:
+        '200':
+          description: Успешная авторизация, возвращает токен
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+        '401':
+          description: Неверные учетные данные
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: "unauthorized"
+        '400':
+          description: Неверный формат запроса
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: "bad request"
+
+  /search:
+    get:
+      tags:
+        - Search
+      summary: Обычный поиск комиксов
+      description: |
+        Выполняет поиск комиксов по базе данных.
+        Использует concurrency limiter для ограничения одновременных запросов.
+        При достижении лимита возвращает HTTP 503.
+      operationId: search
+      parameters:
+        - name: phrase
+          in: query
+          required: true
+          description: Фраза для поиска
+          schema:
+            type: string
+            example: "linux cpu"
+        - name: limit
+          in: query
+          required: false
+          description: Максимальное количество результатов (по умолчанию 10)
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 10
+            example: 10
+      responses:
+        '200':
+          description: Успешный поиск
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ComicsReply'
+              example:
+                comics:
+                  - id: 196
+                    url: "https://imgs.xkcd.com/comics/command_line_fu.png"
+                  - id: 619
+                    url: "https://imgs.xkcd.com/comics/supported_features.png"
+                total: 2
+        '400':
+          description: Неверные параметры запроса
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: "no phrase"
+        '404':
+          description: Комиксы не найдены
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: "no comics found"
+        '503':
+          description: Сервис недоступен (достигнут лимит concurrent запросов)
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: "service unavailable"
+
+  /isearch:
+    get:
+      tags:
+        - Search
+      summary: Индексный поиск комиксов
+      description: |
+        Выполняет быстрый поиск комиксов по индексу.
+        Использует rate limiter для ограничения количества запросов в секунду.
+        Запросы задерживаются при превышении лимита, но не возвращают 503.
+      operationId: indexSearch
+      parameters:
+        - name: phrase
+          in: query
+          required: true
+          description: Фраза для поиска
+          schema:
+            type: string
+            example: "linux forever"
+        - name: limit
+          in: query
+          required: false
+          description: Максимальное количество результатов (по умолчанию 10)
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 10
+            example: 10
+      responses:
+        '200':
+          description: Успешный поиск
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ComicsReply'
+              example:
+                comics:
+                  - id: 196
+                    url: "https://imgs.xkcd.com/comics/command_line_fu.png"
+                  - id: 619
+                    url: "https://imgs.xkcd.com/comics/supported_features.png"
+                total: 2
+        '400':
+          description: Неверные параметры запроса
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: "no phrase"
+        '404':
+          description: Комиксы не найдены
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: "no comics found"
+
+  /db/stats:
+    get:
+      tags:
+        - Statistics
+      summary: Статистика базы данных
+      description: |
+        Возвращает статистику базы данных:
+        - Общее количество комиксов в XKCD
+        - Количество загруженных комиксов
+        - Общее количество слов
+        - Количество уникальных слов
+      operationId: getStats
+      responses:
+        '200':
+          description: Успешный ответ со статистикой
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UpdateStats'
+              example:
+                words_total: 116071
+                words_unique: 14713
+                comics_fetched: 3184
+                comics_total: 3184
+        '500':
+          description: Ошибка сервера
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: "internal server error"
+
+  /db/status:
+    get:
+      tags:
+        - Statistics
+      summary: Статус обновления базы данных
+      description: |
+        Возвращает текущий статус процесса обновления базы данных.
+        Может быть "idle" (простаивает) или "running" (выполняется).
+      operationId: getStatus
+      responses:
+        '200':
+          description: Успешный ответ со статусом
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UpdateStatus'
+              example:
+                status: "idle"
+        '500':
+          description: Ошибка сервера
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: "internal server error"
+
+  /db/update:
+    post:
+      tags:
+        - Database
+      summary: Запуск обновления базы данных
+      description: |
+        Запускает процесс обновления базы данных комиксов.
+        Загружает новые комиксы с XKCD API и сохраняет их в базу данных.
+        Если обновление уже выполняется, возвращает HTTP 202 (Accepted).
+        
+        **Требует аутентификации.**
+      operationId: updateDatabase
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Обновление запущено успешно
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: ""
+        '202':
+          description: Обновление уже выполняется
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: "update already runs"
+        '401':
+          description: Не авторизован
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: "unauthorized"
+        '500':
+          description: Ошибка сервера
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: "internal server error"
+
+  /db:
+    delete:
+      tags:
+        - Database
+      summary: Очистка базы данных
+      description: |
+        Полностью очищает базу данных, удаляя все комиксы и связанные данные.
+        Это действие нельзя отменить.
+        
+        **Требует аутентификации.**
+      operationId: dropDatabase
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: База данных очищена успешно
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: ""
+        '401':
+          description: Не авторизован
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: "unauthorized"
+        '500':
+          description: Ошибка сервера
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: "internal server error"
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: Token
+      description: |
+        JWT токен, полученный через POST /api/login.
+        Передавайте токен в заголовке: Authorization: Token <токен>
+      x-bearer-format: Token
+
+  schemas:
+    PingResponse:
+      type: object
+      required:
+        - replies
+      properties:
+        replies:
+          type: object
+          additionalProperties:
+            type: string
+            enum: [ok, unavailable]
+          description: Статус каждого сервиса
+          example:
+            update: "ok"
+            search: "ok"
+            words: "ok"
+
+    LoginRequest:
+      type: object
+      required:
+        - name
+        - password
+      properties:
+        name:
+          type: string
+          description: Имя пользователя
+          example: "admin"
+        password:
+          type: string
+          format: password
+          description: Пароль
+          example: "password"
+
+    ComicsReply:
+      type: object
+      required:
+        - comics
+        - total
+      properties:
+        comics:
+          type: array
+          items:
+            $ref: '#/components/schemas/Comic'
+          description: Список найденных комиксов
+        total:
+          type: integer
+          description: Общее количество найденных комиксов
+          example: 2
+
+    Comic:
+      type: object
+      required:
+        - id
+        - url
+      properties:
+        id:
+          type: integer
+          description: Идентификатор комикса
+          example: 196
+        url:
+          type: string
+          format: uri
+          description: URL изображения комикса
+          example: "https://imgs.xkcd.com/comics/command_line_fu.png"
+
+    UpdateStats:
+      type: object
+      required:
+        - words_total
+        - words_unique
+        - comics_fetched
+        - comics_total
+      properties:
+        words_total:
+          type: integer
+          description: Общее количество слов в базе данных
+          example: 116071
+        words_unique:
+          type: integer
+          description: Количество уникальных слов
+          example: 14713
+        comics_fetched:
+          type: integer
+          description: Количество загруженных комиксов
+          example: 3184
+        comics_total:
+          type: integer
+          description: Общее количество комиксов в XKCD
+          example: 3184
+
+    UpdateStatus:
+      type: object
+      required:
+        - status
+      properties:
+        status:
+          type: string
+          enum: [idle, running]
+          description: Статус процесса обновления
+          example: "idle"
